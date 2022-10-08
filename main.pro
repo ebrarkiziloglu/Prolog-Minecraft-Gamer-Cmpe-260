@@ -19,7 +19,7 @@ minimum_of_list([H|T], Minimum) :-
 
 % Predicate 3.3:
 % In this predicate, firstly, all of the keys of the objects with the given type is gathered in the list KeyList.
-% Then, this list is sent to find_min predicate to determine the distances.
+% Then, this list is sent to find_distances predicate to determine the distances.
 % Object keys and their distances to the agent are now recorded in the dictionary ResultDict.
 % This dictionary is sent to min_of_dict predicate to determine the minimum value (aka min distance).
 % Then, with 2 get_dict's, the key of this min distance and and the corresponding object is determined.
@@ -27,7 +27,7 @@ find_nearest_type(State, ObjectType, ObjKey, Object, Distance) :-
     State = [AgentDict, ObjectDict, _], 
     TempObjectDict = _{},
     findall(Object, ObjectDict.Object.type=ObjectType, KeyList),
-    find_min(ObjectDict, KeyList, AgentDict.x, AgentDict.y, TempObjectDict, ResultDict),
+    find_distances(ObjectDict, KeyList, AgentDict.x, AgentDict.y, TempObjectDict, ResultDict),
     min_of_dict(ResultDict, Distance),
     get_dict(ObjKey, ResultDict, Distance),
     get_dict(ObjKey, ObjectDict, Object).
@@ -43,15 +43,14 @@ min_of_dict(Dict, MinValue) :-
 % reaches the corresponding object in the Objects dictionary.
 % For each of these objects, it calculates the manhattan_dictsance between the object and the agent,
 % and the object key and the distance are added to the dictionary.
-find_min(_, [], _, _, TempObjectDict, ResultDict) :- ResultDict = TempObjectDict.
-find_min(Objects, KeyList, AgentX, AgentY, TempObjectDict, ResultDict) :-
+find_distances(_, [], _, _, TempObjectDict, ResultDict) :- ResultDict = TempObjectDict.
+find_distances(Objects, KeyList, AgentX, AgentY, TempObjectDict, ResultDict) :-
     member(Key, KeyList), 
-    % member_of_list(Key, KeyList), 
     get_dict(Key, Objects, Value),
     manhattan_distance([Value.x,Value.y], [AgentX, AgentY], Distance),
     put_dict(Key, TempObjectDict, Distance, NewDict),
     delete(KeyList, Key, KeyList_),
-    find_min(Objects, KeyList_, AgentX, AgentY, NewDict, ResultDict).
+    find_distances(Objects, KeyList_, AgentX, AgentY, NewDict, ResultDict).
 
 % Predicate 3.4:
 % Given X and Y coordinates, the difference of X and Y are calculated from agent's current location 
@@ -115,7 +114,7 @@ acquire_nearest_object(State, Type, ActionList) :-
 
 % Predicate 3.8:
 % Following predicate generates an action list to make necessary actions to be able to craft an item with the given Type.
-% According to Type, one of the generate_requirement_list predicates is called (2 predicates above).
+% According to Type, one of the generate_requirement_list predicates is called (2 predicates defined below).
 % With the required items list now avaliable, generate_actions predicate is called to collect all of the required items.
 % List of actions coming from generate_actions and RequiredCraftList (either empty or has only element 'craft_stick') are appended to form ActionList.
 collect_requirements(State, Type, ActionList) :-
@@ -141,6 +140,20 @@ collect_requirements(State, Type, ActionList) :-
     generate_actions(State, ReqList, InitialActions),
     append(InitialActions, RequiredCraftList, ActionList).
 
+% Following predicate creates the necessary items list for a stick to be crafted, 
+% according to the current number of sticks in the inventory.
+% This predicate is called in the collect_requirements predicate.
+generate_requirement_list_for_stick(AgentDict, ReqList) :-
+    get_dict(inventory, AgentDict, Inv),
+    (
+        LogCount = Inv.get(log), 
+        (
+            LogCount > 1, !, ReqList = []
+        ;   LogCount < 2, !, ReqList = [tree]
+        )
+    ;   \+Inv.get(log), !, ReqList = [tree]
+    ).
+
 % Following predicate creates the necessary items list for a stone_pickaxe or stone_axe to be crafted, 
 % according to the current number of sticks, logs and cobblestones in the inventory.
 % Parameter NeedStickCraft keeps the knowledge of whether a stick is needed to be crafted or not.
@@ -154,17 +167,17 @@ generate_requirement_list_for_axes(AgentDict, ReqList, NeedStickCraft) :-
         LogCount = Inv.get(log), 
         (
             LogCount > 4 -> % enough logs for both log and stick requirement,
-            LogList = [], TreeForStick = false;
+            LogList = [], !, TreeForStick = false;
             LogCount > 2 -> % not enough logs for stick requirement,
-            LogList = [/*tree_for_stick*/], TreeForStick = true;
-            LogCount = 2 -> LogList = [tree], TreeForStick = false;
+            LogList = [/*tree_for_stick*/], !, TreeForStick = true;
+            LogCount = 2 -> LogList = [tree], !, TreeForStick = false;
             LogCount < 2 -> % 1 tree needed for log requirement, 
             % 1 tree may be needed for stick requirement
-            LogList = [tree/*, tree_for_stick*/], TreeForStick = true
+            LogList = [tree/*, tree_for_stick*/], !, TreeForStick = true
         );
         \+Inv.get(log), 
         % 1 tree needed for log requirement, 1 tree may be needed for stick requirement
-        LogList = [tree/*, tree_for_stick*/], TreeForStick = true
+        LogList = [tree/*, tree_for_stick*/], !, TreeForStick = true
     ),
 
     % Inventory check for 2 sticks:
@@ -204,41 +217,24 @@ generate_requirement_list_for_axes(AgentDict, ReqList, NeedStickCraft) :-
 % chop or mine it according to the type and keeps the data of the necessary actions.
 % Then with recursion, for all of the items in the list, necessary actions aree appended together to form ActionList at the end.
 % This predicate is called in the collect_requirements predicate.
+generate_actions(_, [], []) :- !.
 generate_actions(State, ItemList, ActionList) :-
+    select(Elem, ItemList, NewItemList),
     (
-        ItemList = [], ActionList = []
-    ;   select(Elem, ItemList, NewItemList),
-        (
-            Elem = tree,
-            chop_nearest_tree(State, ActionList1)
-        ;   Elem = stone,
-            mine_nearest_stone(State, ActionList1)
-        ),
-        execute_actions(State, ActionList1, NextState),
-        generate_actions(NextState, NewItemList, ActionList2),
-        append(ActionList1, ActionList2, ActionList)
-    ).
-
-
-% Following predicate creates the necessary items list for a stick to be crafted, 
-% according to the current number of sticks in the inventory.
-% This predicate is called in the collect_requirements predicate.
-generate_requirement_list_for_stick(AgentDict, ReqList) :-
-    get_dict(inventory, AgentDict, Inv),
-    (
-        LogCount = Inv.get(log), 
-        (
-            LogCount > 1, ReqList = []
-        ;   LogCount < 2, ReqList = [tree]
-        )
-    ;   \+Inv.get(log), ReqList = [tree]
-    ).
+        Elem = tree,
+        chop_nearest_tree(State, ActionList1)
+    ;   Elem = stone,
+        mine_nearest_stone(State, ActionList1)
+    ),
+    execute_actions(State, ActionList1, NextState),
+    generate_actions(NextState, NewItemList, ActionList2),
+    append(ActionList1, ActionList2, ActionList).
 
 % Predicate 3.9:
 % Recursive predicate (defined below) is called to find an appropriate location for a castle.    
 find_castle_location(State, XMin, YMin, XMax, YMax) :- 
     State = [_, ObjectDict, _],
-    % width(W), height(H), 
+    % width(W), height(H):
     % XMin = 1, 2, 3, ..., W-4
     % YMin = 1, 2, 3, ..., H-4
     find_castle(ObjectDict, 1, 1, XMin, YMin), 
@@ -292,20 +288,13 @@ make_castle(State, ActionList) :-
         ; \+Inv.get(cobblestone), collect_cobblestones(State, CoubleActions, 0)
     ),
     execute_actions(State, CoubleActions, InterState),
-    find_castle_location(InterState, XMin, YMin, XMax, _),
+    find_castle_location(InterState, XMin, YMin, _, _),
     X1 is XMin, Y1 is YMin, 
     width(W), height(H), Depth is W+H,
     navigate_to(InterState, X1, Y1, InitialMoveList, Depth),
     append(CoubleActions, InitialMoveList, InitialList),
     build_castle(BuildList),
-    (
-        XMax = W-2, ExtraAction = [];
-        % If the agent is not at the right-far column, 
-        % it can move to right to display the castler better (although not necessary).
-        XMax < W-2, ExtraAction = [go_right]
-    ),
-    append(BuildList, ExtraAction, CastleList),
-    append(InitialList, CastleList, ActionList).
+    append(InitialList, BuildList, ActionList).
 
 % Following predicate generates actions to reach 9 cobblestones in the inventory
 % Parameter Count here represents the current number of cobblestones in the inventory
